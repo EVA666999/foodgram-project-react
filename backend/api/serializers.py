@@ -42,6 +42,7 @@ class UserSerializer(serializers.ModelSerializer):
             "first_name",
             "last_name",
             "is_subscribed",
+            "password",
         )
         read_only_fields = ("id",)
 
@@ -65,7 +66,7 @@ class UserSerializer(serializers.ModelSerializer):
         if isinstance(current_user, AnonymousUser):
             return False
 
-        return obj.follower.filter(following=current_user).exists()
+        return obj.follower.filter(user=current_user).exists()
 
 
 class UserMeSerializer(serializers.ModelSerializer):

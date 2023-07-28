@@ -1,4 +1,4 @@
-from api.permissions import GuestPermission, IsAuthorOrReadOnlyPermission
+from api.permissions import IsAuthorOrReadOnlyPermission
 from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -7,7 +7,7 @@ from rest_framework import generics, status, viewsets
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.exceptions import ValidationError
-from rest_framework.permissions import AllowAny, IsAuthenticatedOrReadOnly
+from rest_framework.permissions import IsAuthenticatedOrReadOnly
 from rest_framework.generics import RetrieveAPIView
 from rest_framework.response import Response
 from rest_framework.exceptions import APIException
@@ -45,7 +45,6 @@ class UserViewSet(viewsets.ModelViewSet):
     serializer_class = UserSerializer
     http_method_names = ["get", "post", "patch", "delete"]
     pagination_class = Pagination
-    permission_classes = [GuestPermission]
 
     @action(methods=["post"], detail=False, url_path="set_password")
     def set_password(self, request):
@@ -82,7 +81,6 @@ class UserMeAPIView(RetrieveAPIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-@permission_classes([AllowAny])
 class GetToken(generics.CreateAPIView):
     """Получение токена пользователем."""
 
