@@ -1,9 +1,4 @@
-from api.permissions import (
-    GuestPermission,
-    IsAuthenticatedOrReadOnly,
-    IsAuthor,
-    IsAuthorOrReadOnlyPermission,
-)
+from api.permissions import GuestPermission, IsAuthorOrReadOnlyPermission
 from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -12,34 +7,21 @@ from rest_framework import generics, status, viewsets
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.exceptions import ValidationError
+from rest_framework.permissions import AllowAny, IsAuthenticatedOrReadOnly
 from rest_framework.generics import RetrieveAPIView
-from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.exceptions import APIException
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from users.models import User
 
-from .models import (
-    Basket,
-    Favorites,
-    Follow,
-    Ingredient,
-    RecipeIngredient,
-    Recipes,
-    Tag,
-)
+from .models import (Basket, Favorites, Follow,
+                     Ingredient, Recipes, Tag)
 from .pagination import Pagination
 from .serializers import (
-    BasketSerializer,
-    ChangePasswordSerializer,
-    ConfirmationSerializer,
-    FavoritesSerializer,
-    FollowSerializer,
-    IngredientSerializer,
-    RecipesSerializer,
-    TagSerializer,
-    UserMeSerializer,
-    UserSerializer,
+    BasketSerializer, ChangePasswordSerializer, ConfirmationSerializer,
+    FavoritesSerializer, FollowSerializer, IngredientSerializer,
+    RecipesSerializer, TagSerializer, UserMeSerializer, UserSerializer,
 )
 
 
@@ -68,26 +50,24 @@ class UserViewSet(viewsets.ModelViewSet):
     @action(methods=["post"], detail=False, url_path="set_password")
     def set_password(self, request):
         serializer = ChangePasswordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
 
-        if serializer.is_valid():
-            user = request.user
-            if not user.check_password(
-               serializer.data.get("current_password")):
-                return Response(
-                    {"current_password": ["Неверный пароль."]},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            user.set_password(serializer.data.get("new_password"))
-            user.save()
-            response = {
-                "status": "success",
-                "code": status.HTTP_200_OK,
-                "message": "Пароль успешно обновлен",
-                "data": [],
-            }
-            return Response(response)
+        user = request.user
+        if not user.check_password(serializer.data.get("current_password")):
+            raise APIException(
+                detail={"current_password": ["Неверный пароль."]},
+                code=status.HTTP_400_BAD_REQUEST)
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        user.set_password(serializer.data.get("new_password"))
+        user.save()
+
+        response = {
+            "status": "success",
+            "code": status.HTTP_200_OK,
+            "message": "Пароль успешно обновлен",
+            "data": [],
+        }
+        return Response(response)
 
 
 class UserMeAPIView(RetrieveAPIView):
@@ -201,43 +181,30 @@ class AddRecipeToShoppingCart(APIView):
     permission_classes = [IsAuthenticatedOrReadOnly]
 
     def post(self, request, id):
-        try:
-            recipe_id = int(id)
-            quantity = int(request.data.get("quantity", 1))
-            cooking_time = int(request.data.get("cooking_time", 0))
-            recipe = Recipes.objects.get(pk=recipe_id)
-            ingredient = recipe.ingredients.first()
+        recipe_id = int(id)
+        quantity = int(request.data.get("quantity", 1))
+        cooking_time = int(request.data.get("cooking_time", 0))
+        recipe = get_object_or_404(Recipes, pk=recipe_id)
+        ingredient = recipe.ingredients.all()
 
-            basket = Basket.objects.create(
-                recipe=recipe,
-                user=request.user,
-                quantity=quantity,
-                cooking_time=cooking_time,
-                image=recipe.image,
-                ingredient=ingredient,
-            )
-            serializer = BasketSerializer(basket)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-        except Recipes.DoesNotExist:
-            return Response(
-                {"error": "Рецепт не найден"}, status=status.HTTP_404_NOT_FOUND
-            )
+        basket = Basket.objects.create(
+            recipe=recipe,
+            user=request.user,
+            quantity=quantity,
+            cooking_time=cooking_time,
+            image=recipe.image,
+            ingredient=ingredient,
+        )
+        serializer = BasketSerializer(basket)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def delete(self, request, id):
         try:
             recipe_id = int(id)
-            basket = Basket.objects.filter(
-                recipe_id=recipe_id, user=request.user
-            ).first()
+            basket = request.user.baskets.filter(recipe_id=recipe_id)
             if basket:
                 basket.delete()
                 return Response(status=status.HTTP_204_NO_CONTENT)
-            else:
-                return Response(
-                    {"error": "Рецепт не найден в списке покупок"},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
         except Exception as e:
             return Response(
                 {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -245,7 +212,7 @@ class AddRecipeToShoppingCart(APIView):
 
 
 @api_view(["GET"])
-@permission_classes([IsAuthor])
+@permission_classes([IsAuthorOrReadOnlyPermission])
 def download_shopping_list(request):
     """
     Скачать рецепт из корзины.
@@ -261,7 +228,7 @@ def download_shopping_list(request):
 
     for basket in shopping_list:
         recipe = basket.recipe
-        recipe_ingredients = RecipeIngredient.objects.filter(recipe=recipe)
+        recipe_ingredients = recipe.recipe_ingredients.all()
         message = "Спасибо что пользуетесь нашим сервисом!"
 
         for recipe_ingredient in recipe_ingredients:
@@ -293,7 +260,7 @@ class FavoritesViewSet(viewsets.GenericViewSet):
     lookup_field = "recipe_id"
 
     def get_queryset(self):
-        return Favorites.objects.filter(user=self.request.user)
+        return self.request.user.favorite_user.all()
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -302,7 +269,7 @@ class FavoritesViewSet(viewsets.GenericViewSet):
 
     def create(self, request, *args, **kwargs):
         recipe_id = self.kwargs.get("recipe_id")
-        recipe = Recipes.objects.filter(pk=recipe_id).first()
+        recipe = get_object_or_404(Recipes, pk=recipe_id).first()
         favorites_exists = Favorites.objects.filter(
             user=request.user, recipe=recipe
         ).exists()
@@ -354,40 +321,36 @@ class FollowViewSet(viewsets.ModelViewSet):
 
     def create(self, request, *args, **kwargs):
         user_id = self.kwargs.get("user_id")
-        try:
-            author = User.objects.get(pk=user_id)
-            follow, created = Follow.objects.get_or_create(
-                user=request.user,
-                author=author,
-            )
-            author_name = follow.author.username
-            if created:
-                serializer = FollowSerializer(follow,
-                                              context={"request": request})
-                return Response(serializer.data,
-                                status=status.HTTP_201_CREATED)
-            else:
-                message = f"Вы уже подписаны на {author_name}!"
-                return Response(
-                    {"message": message}, status=status.HTTP_400_BAD_REQUEST
-                )
-        except User.DoesNotExist:
+        author = get_object_or_404(User, pk=user_id)
+        follow, created = Follow.objects.get_or_create(
+            user=request.user,
+            author=author,)
+        author_name = follow.author.username
+        if created:
+            serializer = FollowSerializer(follow,
+                                          context={"request": request})
+            return Response(serializer.data,
+                            status=status.HTTP_201_CREATED)
+        # можно оставлю else хочу что бы выводилось имя если уже подписан)
+        else:
+            message = f"Вы уже подписаны на {author_name}!"
             return Response(
-                {"error": "Автор не найден!"},
-                status=status.HTTP_400_BAD_REQUEST
+                {"message": message}, status=status.HTTP_400_BAD_REQUEST
             )
 
     def destroy(self, request, *args, **kwargs):
         user_id = self.kwargs.get("user_id")
         try:
-            follow = Follow.objects.get(user=request.user, author_id=user_id)
+            follow = get_object_or_404(Follow, user=request.user,
+                                       author_id=user_id)
             follow.delete()
             author_name = follow.author.username
             message = f"Вы успешно отписались от {author_name}!"
             return Response({"message": message},
                             status=status.HTTP_204_NO_CONTENT)
+        # и тут я хочу выводить имя можно и оставить правильно)
         except Follow.DoesNotExist:
-            author = User.objects.get(pk=user_id)
+            author = get_object_or_404(User, pk=user_id)
             author_name = author.username
             message = f"Вы не подписаны на {author_name}!"
             return Response({"message": message},

@@ -2,8 +2,10 @@ import base64
 
 from django.contrib.auth.models import AnonymousUser
 from django.core.files.base import ContentFile
-from rest_framework import serializers
+from django.shortcuts import get_object_or_404
 from users.models import User
+
+from rest_framework import serializers
 
 from .models import (
     Basket,
@@ -28,6 +30,7 @@ class Base64ImageField(serializers.ImageField):
 
 
 class UserSerializer(serializers.ModelSerializer):
+    """Сериализатор для работы users"""
     is_subscribed = serializers.SerializerMethodField()
 
     class Meta:
@@ -59,11 +62,10 @@ class UserSerializer(serializers.ModelSerializer):
     def get_is_subscribed(self, obj):
         current_user = self.context["request"].user
 
-        # Если текущий пользователь является анонимным, вернуть False
         if isinstance(current_user, AnonymousUser):
             return False
 
-        return Follow.objects.filter(user=current_user, author=obj).exists()
+        return obj.follower.filter(following=current_user).exists()
 
 
 class UserMeSerializer(serializers.ModelSerializer):
@@ -117,7 +119,9 @@ class IngredientSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-class RecipeIngridientSerializer(serializers.ModelSerializer):
+class RecipeIngredientSerializer(serializers.ModelSerializer):
+    MIN_AMOUNT: int = 1
+    MAX_AMOUNT: int = 32000
     id = serializers.ReadOnlyField(source="ingredient.id")
     name = serializers.ReadOnlyField(source="ingredient.name")
     measurement_unit = serializers.ReadOnlyField(
@@ -132,11 +136,23 @@ class RecipeIngridientSerializer(serializers.ModelSerializer):
             "amount",
         )
 
+    def validate_amount(self, value):
+        if (value < RecipeIngredientSerializer.MIN_AMOUNT
+           or value > RecipeIngredientSerializer.MAX_AMOUNT):
+            raise serializers.ValidationError(
+                f"Amount должно быть не меньше"
+                f"{RecipeIngredientSerializer.MIN_AMOUNT} и не больше"
+                f"{RecipeIngredientSerializer.MAX_AMOUNT}."
+            )
+        return value
+
 
 class RecipesSerializer(serializers.ModelSerializer):
+    MIN_AMOUNT: int = 1
+    MAX_AMOUNT: int = 32000
     author = UserMeSerializer(many=False, required=True)
     tags = TagSerializer(many=True, required=True)
-    ingredients = RecipeIngridientSerializer(many=True,
+    ingredients = RecipeIngredientSerializer(many=True,
                                              source="recipeingredient_set")
     is_favorited = serializers.SerializerMethodField()
     is_in_shopping_cart = serializers.SerializerMethodField()
@@ -171,6 +187,16 @@ class RecipesSerializer(serializers.ModelSerializer):
 
         return recipe
 
+    def validate_cooking_time(self, value):
+        if (value < RecipesSerializer.MIN_AMOUNT
+           or value > RecipesSerializer.MAX_AMOUNT):
+            raise serializers.ValidationError(
+                f"cooking_time должно быть не меньше"
+                f"{RecipesSerializer.MIN_AMOUNT} и не больше"
+                f" {RecipesSerializer.MAX_AMOUNT}."
+            )
+        return value
+
 
 class BasketSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField()
@@ -200,15 +226,11 @@ class FavoritesSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         recipe_id = self.context["view"].kwargs["recipe_id"]
-        try:
-            recipe = Recipes.objects.get(pk=recipe_id)
-            favorites = Favorites.objects.create(
-                user=self.context["request"].user,
-                recipe=recipe,
-            )
-            return favorites
-        except Recipes.DoesNotExist:
-            raise serializers.ValidationError("Рецепт не найден")
+        recipe = get_object_or_404(Recipes, pk=recipe_id)
+        favorites = Favorites.objects.create(
+            user=self.context["request"].user,
+            recipe=recipe,)
+        return favorites
 
     def get_recipes(self, favorites):
         author_recipes = favorites.recipe.author.recipes.all()

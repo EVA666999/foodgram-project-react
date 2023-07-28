@@ -23,16 +23,17 @@ class RecipeIngredientAdmin(admin.ModelAdmin):
     search_fields = ("recipe__name", "ingredient__name", "measurement_unit")
 
 
-class RecipeIngtidientInline(admin.TabularInline):
+class RecipeIngredientInline(admin.TabularInline):
     model = RecipeIngredient
     extra = 1
+    min_num = 1
 
 
 class RecipesAdmin(admin.ModelAdmin):
     list_display = ("id", "name", "author", "cooking_time")
     list_filter = ("author", "tags", "cooking_time")
     search_fields = ("name", "author__username")
-    inlines = (RecipeIngtidientInline,)
+    inlines = (RecipeIngredientInline,)
 
 
 class IngredientAdmin(admin.ModelAdmin):
