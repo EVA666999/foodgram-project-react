@@ -6,9 +6,8 @@ from api.views import (
     GetToken,
     TokenDeleteView,
     UserMeAPIView,
-    UserRecipesViewSet,
-    download_shopping_list,
-)
+    download_shopping_list)
+
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
@@ -41,17 +40,11 @@ urlpatterns = [
         FollowViewSet.as_view({"post": "create", "delete": "destroy"}),
         name="subscribe",
     ),
-    path(
-        "api/users/subscriptions/",
-        FollowViewSet.as_view({"get": "list"}),
-        name="subscribtions",
-    ),
+    path('api/users/subscriptions/', FollowViewSet.as_view(
+        {'get': 'list', 'delete': 'destroy'}), name='subscriptions'),
+    path('subscriptions/<int:user_id>/', FollowViewSet.as_view(
+        {'post': 'create', 'delete': 'destroy'}), name='subscription-detail'),
     path("api/users/me/", UserMeAPIView.as_view(), name="me"),
-    path(
-        "api/users/<int:user_id>/",
-        UserRecipesViewSet.as_view({"get": "list"}),
-        name="users-tag",
-    ),
     path("api/", include(router.urls)),
 ]
 

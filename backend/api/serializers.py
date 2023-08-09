@@ -90,6 +90,21 @@ class UserMeSerializer(serializers.ModelSerializer):
             "password",
         )
 
+    def get_is_subscribed(self, obj):
+        current_user = self.context["request"].user
+
+        if isinstance(current_user, AnonymousUser):
+            return False
+
+        return obj.follower.filter(user=current_user).exists()
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['is_subscribed'] = self.get_is_subscribed(instance)
+        rep['first_name'] = instance.first_name
+        rep['last_name'] = instance.last_name
+        return rep
+
 
 class ChangePasswordSerializer(serializers.Serializer):
     model = User
@@ -151,10 +166,11 @@ class RecipeIngredientSerializer(serializers.ModelSerializer):
 class RecipesSerializer(serializers.ModelSerializer):
     MIN_AMOUNT: int = 1
     MAX_AMOUNT: int = 32000
-    author = UserMeSerializer(many=False, required=True)
-    tags = TagSerializer(many=True, required=True)
+    author = UserMeSerializer(many=False, required=False)
+    tags = serializers.PrimaryKeyRelatedField(queryset=Tag.objects.all(),
+                                              many=True)
     ingredients = RecipeIngredientSerializer(many=True,
-                                             source="recipeingredient_set")
+                                             source="recipe_ingredients")
     is_favorited = serializers.SerializerMethodField()
     is_in_shopping_cart = serializers.SerializerMethodField()
 
@@ -179,12 +195,19 @@ class RecipesSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         tags_data = validated_data.pop("tags")
-        ingredients_data = validated_data.pop("ingredients")
-
+        ingredients_data = validated_data.pop("recipe_ingredients")
         recipe = Recipes.objects.create(**validated_data)
-
         recipe.tags.set(tags_data)
-        recipe.ingredients.set(ingredients_data)
+
+        for ingredient_data in ingredients_data:
+            ingredient_id = ingredient_data.get("id")
+            amount = ingredient_data.get("amount")
+            if ingredient_id and amount:
+                RecipeIngredient.objects.create(
+                    recipe=recipe,
+                    ingredient_id=ingredient_id,
+                    amount=amount
+                )
 
         return recipe
 
@@ -197,6 +220,27 @@ class RecipesSerializer(serializers.ModelSerializer):
                 f" {RecipesSerializer.MAX_AMOUNT}."
             )
         return value
+
+    def update(self, instance, validated_data):
+        tags_data = validated_data.pop('tags', [])
+        instance.tags.set(tags_data)
+
+        instance.save()
+        return instance
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        tags_data = []
+        for tag in instance.tags.all():
+            tag_data = {
+                'id': tag.id,
+                'name': tag.name,
+                'color': tag.color,
+                'slug': tag.slug,
+            }
+            tags_data.append(tag_data)
+        rep['tags'] = tags_data
+        return rep
 
 
 class BasketSerializer(serializers.ModelSerializer):
@@ -250,21 +294,25 @@ class CustomRecipesSerializer(serializers.ModelSerializer):
 class FollowSerializer(serializers.ModelSerializer):
     recipes = serializers.SerializerMethodField()
     recipes_count = serializers.SerializerMethodField()
-    author = UserMeSerializer(many=False, required=True)
+    author = UserMeSerializer(many=False, read_only=True)
 
     class Meta:
         model = Follow
-        exclude = (
-            "id",
-            "user",
-        )
+        fields = '__all__'
 
     def get_recipes(self, follow):
-        author_recipes = follow.author.recipes.all()
+        user_recipes = follow.user.recipes.all()
         context = self.context.copy()
         context["request"] = self.context["request"]
-        return CustomRecipesSerializer(author_recipes, many=True,
+        return CustomRecipesSerializer(user_recipes, many=True,
                                        context=context).data
 
     def get_recipes_count(self, follow):
-        return follow.author.recipes.count()
+        return follow.user.recipes.count()
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['id'] = instance.user.id
+        rep['first_name'] = instance.user.first_name
+        rep['last_name'] = instance.user.last_name
+        return rep

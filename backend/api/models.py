@@ -43,13 +43,18 @@ class Recipes(models.Model):
     )
     text = models.TextField()
 
-    def __str__(self):
-        return self.name
-
     class Meta:
         verbose_name = "Рецепт"
         verbose_name_plural = "Рецепты"
-        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+    def is_favorite_for_user(self, user):
+        return Favorites.objects.filter(user=user, recipe=self).exists()
+
+    def is_in_shopping_cart_for_user(self, user):
+        return Basket.objects.filter(user=user, recipe=self).exists()
 
 
 class RecipeIngredient(models.Model):
@@ -88,8 +93,8 @@ class Basket(models.Model):
         return f"{self.user.username}'Добавил(а) - {self.recipe.name}"
 
     class Meta:
-        verbose_name = "Рецепт"
-        verbose_name_plural = "Рецепты"
+        verbose_name = "Корзина"
+        verbose_name_plural = "Корзина"
         ordering = ['user__username', 'recipe__name']
 
 

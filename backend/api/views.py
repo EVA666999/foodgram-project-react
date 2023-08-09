@@ -2,6 +2,7 @@ from api.permissions import IsAuthorOrReadOnlyPermission
 from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
+from django.shortcuts import get_list_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import generics, status, viewsets
 from rest_framework.authtoken.models import Token
@@ -11,31 +12,21 @@ from rest_framework.permissions import IsAuthenticatedOrReadOnly
 from rest_framework.generics import RetrieveAPIView
 from rest_framework.response import Response
 from rest_framework.exceptions import APIException
+from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from users.models import User
+
 
 from .models import (Basket, Favorites, Follow,
                      Ingredient, Recipes, Tag)
 from .pagination import Pagination
 from .serializers import (
-    BasketSerializer, ChangePasswordSerializer, ConfirmationSerializer,
+    ChangePasswordSerializer, ConfirmationSerializer,
     FavoritesSerializer, FollowSerializer, IngredientSerializer,
     RecipesSerializer, TagSerializer, UserMeSerializer, UserSerializer,
+    RecipeIngredient
 )
-
-
-class UserRecipesViewSet(viewsets.ModelViewSet):
-    """Эндпоинт для фильтрации по тегам автора"""
-
-    serializer_class = RecipesSerializer
-    filter_backends = [DjangoFilterBackend]
-    filterset_fields = ["name", "tags__name"]
-    permission_classes = [IsAuthenticatedOrReadOnly]
-
-    def get_queryset(self):
-        user_id = self.kwargs.get("user_id")
-        return Recipes.objects.filter(author__id=user_id)
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -45,6 +36,7 @@ class UserViewSet(viewsets.ModelViewSet):
     serializer_class = UserSerializer
     http_method_names = ["get", "post", "patch", "delete"]
     pagination_class = Pagination
+    permission_classes = [AllowAny]
 
     @action(methods=["post"], detail=False, url_path="set_password")
     def set_password(self, request):
@@ -85,6 +77,7 @@ class GetToken(generics.CreateAPIView):
     """Получение токена пользователем."""
 
     serializer_class = ConfirmationSerializer
+    permission_classes = [AllowAny]
 
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
@@ -120,6 +113,7 @@ class TagViewSet(viewsets.ModelViewSet):
 
     queryset = Tag.objects.all()
     serializer_class = TagSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly]
 
 
 class RecipesViewSet(viewsets.ModelViewSet):
@@ -156,15 +150,66 @@ class RecipesViewSet(viewsets.ModelViewSet):
 
         return queryset
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED,
+                        headers=headers)
+
     def perform_create(self, serializer):
-        serializer.save(author=self.request.user)
+        serializer.save(author=self.request.user,
+                        recipe_ingredients=self.request.data.get("ingredients")
+                        )
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data,
+                                         partial=True)
+        serializer.is_valid(raise_exception=True)
+
+        ingredients_data = request.data.get("ingredients")
+        recipe_ingredients_data = request.data.get("recipe_ingredients")
+        tags_data = request.data.get("tags")
+
+        if ingredients_data is not None:
+            instance.recipe_ingredients.all().delete()
+            for ingredient_data in ingredients_data:
+                ingredient_id = ingredient_data.get("id")
+                amount = ingredient_data.get("amount")
+                if ingredient_id and amount:
+                    RecipeIngredient.objects.create(
+                        recipe=instance,
+                        ingredient_id=ingredient_id,
+                        amount=amount
+                    )
+
+        if recipe_ingredients_data is not None:
+            instance.recipe_ingredients.all().delete()
+            for ingredient_data in recipe_ingredients_data:
+                ingredient_id = ingredient_data.get("id")
+                amount = ingredient_data.get("amount")
+                if ingredient_id and amount:
+                    RecipeIngredient.objects.create(
+                        recipe=instance,
+                        ingredient_id=ingredient_id,
+                        amount=amount
+                    )
+
+        if tags_data is not None:
+            instance.tags.set(tags_data)
+
+        serializer.save()
+
+        return Response(serializer.data)
 
 
 class IngredientViewSet(viewsets.ModelViewSet):
     """
     Получить список всех ингедиентов,
     """
-
+    permission_classes = [IsAuthenticatedOrReadOnly]
     queryset = Ingredient.objects.all()
     serializer_class = IngredientSerializer
 
@@ -183,30 +228,27 @@ class AddRecipeToShoppingCart(APIView):
         quantity = int(request.data.get("quantity", 1))
         cooking_time = int(request.data.get("cooking_time", 0))
         recipe = get_object_or_404(Recipes, pk=recipe_id)
-        ingredient = recipe.ingredients.all()
 
-        basket = Basket.objects.create(
-            recipe=recipe,
-            user=request.user,
-            quantity=quantity,
-            cooking_time=cooking_time,
-            image=recipe.image,
-            ingredient=ingredient,
-        )
-        serializer = BasketSerializer(basket)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        for ingredient in recipe.ingredients.all():
+            Basket.objects.create(
+                recipe=recipe,
+                user=request.user,
+                quantity=quantity,
+                cooking_time=cooking_time,
+                image=recipe.image,
+                ingredient=ingredient,
+            )
+        return Response(status=status.HTTP_201_CREATED)
 
     def delete(self, request, id):
-        try:
-            recipe_id = int(id)
-            basket = request.user.baskets.filter(recipe_id=recipe_id)
-            if basket:
-                basket.delete()
-                return Response(status=status.HTTP_204_NO_CONTENT)
-        except Exception as e:
-            return Response(
-                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        recipe_id = int(id)
+        baskets = Basket.objects.filter(user=request.user, recipe_id=recipe_id)
+        if baskets.exists():
+            basket = baskets.first()
+            basket.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        else:
+            return Response(status=status.HTTP_404_NOT_FOUND)
 
 
 @api_view(["GET"])
@@ -267,7 +309,7 @@ class FavoritesViewSet(viewsets.GenericViewSet):
 
     def create(self, request, *args, **kwargs):
         recipe_id = self.kwargs.get("recipe_id")
-        recipe = get_object_or_404(Recipes, pk=recipe_id).first()
+        recipe = get_object_or_404(Recipes, pk=recipe_id)
         favorites_exists = Favorites.objects.filter(
             user=request.user, recipe=recipe
         ).exists()
@@ -322,14 +364,14 @@ class FollowViewSet(viewsets.ModelViewSet):
         author = get_object_or_404(User, pk=user_id)
         follow, created = Follow.objects.get_or_create(
             user=request.user,
-            author=author,)
+            author=author,
+        )
         author_name = follow.author.username
         if created:
-            serializer = FollowSerializer(follow,
-                                          context={"request": request})
-            return Response(serializer.data,
-                            status=status.HTTP_201_CREATED)
-        # можно оставлю else хочу что бы выводилось имя если уже подписан)
+            serializer = FollowSerializer(
+                follow, context={"request": request, "user_id": user_id}
+            )
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
         else:
             message = f"Вы уже подписаны на {author_name}!"
             return Response(
@@ -338,21 +380,21 @@ class FollowViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         user_id = self.kwargs.get("user_id")
-        try:
-            follow = get_object_or_404(Follow, user=request.user,
-                                       author_id=user_id)
-            follow.delete()
-            author_name = follow.author.username
-            message = f"Вы успешно отписались от {author_name}!"
-            return Response({"message": message},
-                            status=status.HTTP_204_NO_CONTENT)
-        # и тут я хочу выводить имя можно и оставить правильно)
-        except Follow.DoesNotExist:
-            author = get_object_or_404(User, pk=user_id)
-            author_name = author.username
-            message = f"Вы не подписаны на {author_name}!"
-            return Response({"message": message},
+        follows = get_list_or_404(Follow, user=request.user, user_id=user_id)
+
+        if follows:
+            follow_to_delete = follows[0]
+            user_obj = follow_to_delete.user
+            follow_to_delete.delete()
+            serializer = UserMeSerializer(user_obj,
+                                          context={"request": request})
+            return Response(serializer.data)
+        else:
+            return Response({"message": "Подписка не найдена."},
                             status=status.HTTP_404_NOT_FOUND)
+
+    def get_queryset(self):
+        return Follow.objects.filter(user=self.request.user)
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
