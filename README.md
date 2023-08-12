@@ -37,10 +37,6 @@ POST /api/recipes/
 POST /api/recipes/<recipe_id>/favorite/
 
 
-- Создать список покупок:
-
-POST /api/shopping-lists/
-
 ## Использованные технологии
 
 - Python
