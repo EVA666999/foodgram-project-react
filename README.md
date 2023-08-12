@@ -36,7 +36,6 @@ POST /api/recipes/
 
 POST /api/recipes/<recipe_id>/favorite/
 
-
 ## Использованные технологии
 
 - Python
