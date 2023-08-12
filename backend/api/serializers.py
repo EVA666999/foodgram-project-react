@@ -3,9 +3,11 @@ import base64
 from django.contrib.auth.models import AnonymousUser
 from django.core.files.base import ContentFile
 from django.shortcuts import get_object_or_404
-from users.models import User
 
 from rest_framework import serializers
+
+
+from users.models import User
 
 from .models import (
     Basket,
@@ -135,13 +137,20 @@ class IngredientSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+MIN_AMOUNT: int = 1
+MAX_AMOUNT: int = 32000
+
+
 class RecipeIngredientSerializer(serializers.ModelSerializer):
-    MIN_AMOUNT: int = 1
-    MAX_AMOUNT: int = 32000
     id = serializers.ReadOnlyField(source="ingredient.id")
     name = serializers.ReadOnlyField(source="ingredient.name")
     measurement_unit = serializers.ReadOnlyField(
         source="ingredient.measurement_unit")
+    amount = serializers.DecimalField(
+        max_digits=None,
+        decimal_places=None,
+        min_value=MIN_AMOUNT,
+        max_value=MAX_AMOUNT)
 
     class Meta:
         model = RecipeIngredient
@@ -152,20 +161,12 @@ class RecipeIngredientSerializer(serializers.ModelSerializer):
             "amount",
         )
 
-    def validate_amount(self, value):
-        if (value < RecipeIngredientSerializer.MIN_AMOUNT
-           or value > RecipeIngredientSerializer.MAX_AMOUNT):
-            raise serializers.ValidationError(
-                f"Amount должно быть не меньше"
-                f"{RecipeIngredientSerializer.MIN_AMOUNT} и не больше"
-                f"{RecipeIngredientSerializer.MAX_AMOUNT}."
-            )
-        return value
+
+MIN_AMOUNT: int = 1
+MAX_AMOUNT: int = 32000
 
 
 class RecipesSerializer(serializers.ModelSerializer):
-    MIN_AMOUNT: int = 1
-    MAX_AMOUNT: int = 32000
     author = UserMeSerializer(many=False, required=False)
     tags = serializers.PrimaryKeyRelatedField(queryset=Tag.objects.all(),
                                               many=True)
@@ -173,6 +174,11 @@ class RecipesSerializer(serializers.ModelSerializer):
                                              source="recipe_ingredients")
     is_favorited = serializers.SerializerMethodField()
     is_in_shopping_cart = serializers.SerializerMethodField()
+    cooking_time = serializers.DecimalField(
+        max_digits=None,
+        decimal_places=None,
+        min_value=MIN_AMOUNT,
+        max_value=MAX_AMOUNT)
 
     image = Base64ImageField()
 
@@ -199,33 +205,49 @@ class RecipesSerializer(serializers.ModelSerializer):
         recipe = Recipes.objects.create(**validated_data)
         recipe.tags.set(tags_data)
 
+        recipe_ingredients = []
         for ingredient_data in ingredients_data:
             ingredient_id = ingredient_data.get("id")
             amount = ingredient_data.get("amount")
             if ingredient_id and amount:
-                RecipeIngredient.objects.create(
+                recipe_ingredients.append(RecipeIngredient(
                     recipe=recipe,
                     ingredient_id=ingredient_id,
-                    amount=amount
-                )
+                    amount=amount,
+                ))
+
+        RecipeIngredient.objects.bulk_create(recipe_ingredients)
 
         return recipe
 
-    def validate_cooking_time(self, value):
-        if (value < RecipesSerializer.MIN_AMOUNT
-           or value > RecipesSerializer.MAX_AMOUNT):
-            raise serializers.ValidationError(
-                f"cooking_time должно быть не меньше"
-                f"{RecipesSerializer.MIN_AMOUNT} и не больше"
-                f" {RecipesSerializer.MAX_AMOUNT}."
-            )
-        return value
-
     def update(self, instance, validated_data):
-        tags_data = validated_data.pop('tags', [])
-        instance.tags.set(tags_data)
+        tags_data = validated_data.pop("tags")
+        ingredients_data = validated_data.pop("recipe_ingredients")
 
+        instance.name = validated_data.get("name", instance.name)
+        instance.cooking_time = validated_data.get("cooking_time",
+                                                   instance.cooking_time)
+        instance.text = validated_data.get("text", instance.text)
+
+        instance.tags.set(tags_data)
         instance.save()
+
+        for ingredient_data in ingredients_data:
+            ingredient_id = ingredient_data.get("id")
+            amount = ingredient_data.get("amount")
+            if ingredient_id and amount:
+                try:
+                    recipe_ingredient = RecipeIngredient.objects.get(
+                        recipe=instance, ingredient_id=ingredient_id
+                    )
+                    recipe_ingredient.amount = amount
+                    recipe_ingredient.save()
+                except RecipeIngredient.DoesNotExist:
+                    RecipeIngredient.objects.create(
+                        recipe=instance, ingredient_id=ingredient_id,
+                        amount=amount
+                    )
+
         return instance
 
     def to_representation(self, instance):
@@ -291,10 +313,29 @@ class CustomRecipesSerializer(serializers.ModelSerializer):
         fields = ("id", "image", "name", "cooking_time")
 
 
+class AuthorSerializer(serializers.ModelSerializer):
+    recipes = serializers.SerializerMethodField()
+    recipes_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ("id", "recipes", "recipes_count", "first_name", "last_name")
+
+    def get_recipes(self, user):
+        user_recipes = user.recipes.all()
+        context = self.context.copy()
+        context["request"] = self.context["request"]
+        return CustomRecipesSerializer(user_recipes, many=True,
+                                       context=context).data
+
+    def get_recipes_count(self, user):
+        return user.recipes.count()
+
+
 class FollowSerializer(serializers.ModelSerializer):
     recipes = serializers.SerializerMethodField()
     recipes_count = serializers.SerializerMethodField()
-    author = UserMeSerializer(many=False, read_only=True)
+    author = AuthorSerializer(many=False, read_only=True)
 
     class Meta:
         model = Follow
@@ -313,6 +354,16 @@ class FollowSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         rep = super().to_representation(instance)
         rep['id'] = instance.user.id
-        rep['first_name'] = instance.user.first_name
-        rep['last_name'] = instance.user.last_name
+
+        author = instance.author
+        user_recipes = author.recipes.all()
+        context = self.context.copy()
+        context["request"] = self.context["request"]
+        rep['recipes'] = CustomRecipesSerializer(user_recipes, many=True,
+                                                 context=context).data
+        rep['recipes_count'] = author.recipes.count()
+
+        rep['first_name'] = author.first_name
+        rep['last_name'] = author.last_name
+
         return rep

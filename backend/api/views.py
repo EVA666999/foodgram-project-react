@@ -1,4 +1,3 @@
-from api.permissions import IsAuthorOrReadOnlyPermission
 from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -18,6 +17,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from users.models import User
 
 
+from api.permissions import IsAuthorOrReadOnlyPermission
 from .models import (Basket, Favorites, Follow,
                      Ingredient, Recipes, Tag)
 from .pagination import Pagination
@@ -25,7 +25,6 @@ from .serializers import (
     ChangePasswordSerializer, ConfirmationSerializer,
     FavoritesSerializer, FollowSerializer, IngredientSerializer,
     RecipesSerializer, TagSerializer, UserMeSerializer, UserSerializer,
-    RecipeIngredient
 )
 
 
@@ -150,59 +149,10 @@ class RecipesViewSet(viewsets.ModelViewSet):
 
         return queryset
 
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        self.perform_create(serializer)
-        headers = self.get_success_headers(serializer.data)
-        return Response(serializer.data, status=status.HTTP_201_CREATED,
-                        headers=headers)
-
     def perform_create(self, serializer):
         serializer.save(author=self.request.user,
                         recipe_ingredients=self.request.data.get("ingredients")
                         )
-
-    def update(self, request, *args, **kwargs):
-        instance = self.get_object()
-        serializer = self.get_serializer(instance, data=request.data,
-                                         partial=True)
-        serializer.is_valid(raise_exception=True)
-
-        ingredients_data = request.data.get("ingredients")
-        recipe_ingredients_data = request.data.get("recipe_ingredients")
-        tags_data = request.data.get("tags")
-
-        if ingredients_data is not None:
-            instance.recipe_ingredients.all().delete()
-            for ingredient_data in ingredients_data:
-                ingredient_id = ingredient_data.get("id")
-                amount = ingredient_data.get("amount")
-                if ingredient_id and amount:
-                    RecipeIngredient.objects.create(
-                        recipe=instance,
-                        ingredient_id=ingredient_id,
-                        amount=amount
-                    )
-
-        if recipe_ingredients_data is not None:
-            instance.recipe_ingredients.all().delete()
-            for ingredient_data in recipe_ingredients_data:
-                ingredient_id = ingredient_data.get("id")
-                amount = ingredient_data.get("amount")
-                if ingredient_id and amount:
-                    RecipeIngredient.objects.create(
-                        recipe=instance,
-                        ingredient_id=ingredient_id,
-                        amount=amount
-                    )
-
-        if tags_data is not None:
-            instance.tags.set(tags_data)
-
-        serializer.save()
-
-        return Response(serializer.data)
 
 
 class IngredientViewSet(viewsets.ModelViewSet):
@@ -222,6 +172,7 @@ class AddRecipeToShoppingCart(APIView):
 
     pagination_class = Pagination
     permission_classes = [IsAuthenticatedOrReadOnly]
+    # У меня не получается сделать через сериализатор и ModelViewSet
 
     def post(self, request, id):
         recipe_id = int(id)
@@ -243,12 +194,10 @@ class AddRecipeToShoppingCart(APIView):
     def delete(self, request, id):
         recipe_id = int(id)
         baskets = Basket.objects.filter(user=request.user, recipe_id=recipe_id)
-        if baskets.exists():
+        if baskets.first():
             basket = baskets.first()
             basket.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
-        else:
-            return Response(status=status.HTTP_404_NOT_FOUND)
 
 
 @api_view(["GET"])
@@ -366,32 +315,23 @@ class FollowViewSet(viewsets.ModelViewSet):
             user=request.user,
             author=author,
         )
-        author_name = follow.author.username
         if created:
             serializer = FollowSerializer(
                 follow, context={"request": request, "user_id": user_id}
             )
             return Response(serializer.data, status=status.HTTP_201_CREATED)
-        else:
-            message = f"Вы уже подписаны на {author_name}!"
-            return Response(
-                {"message": message}, status=status.HTTP_400_BAD_REQUEST
-            )
 
     def destroy(self, request, *args, **kwargs):
         user_id = self.kwargs.get("user_id")
         follows = get_list_or_404(Follow, user=request.user, user_id=user_id)
 
         if follows:
-            follow_to_delete = follows[0]
+            follow_to_delete = follows[0]  # если ставлю first не работает.
             user_obj = follow_to_delete.user
             follow_to_delete.delete()
             serializer = UserMeSerializer(user_obj,
                                           context={"request": request})
             return Response(serializer.data)
-        else:
-            return Response({"message": "Подписка не найдена."},
-                            status=status.HTTP_404_NOT_FOUND)
 
     def get_queryset(self):
         return Follow.objects.filter(user=self.request.user)
