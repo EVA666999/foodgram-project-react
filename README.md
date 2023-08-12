@@ -36,6 +36,10 @@ POST /api/recipes/
 
 POST /api/recipes/<recipe_id>/favorite/
 
+- Подписатся на автора
+  
+POST /api/users/<int:user_id>/subscribe/
+
 ## Использованные технологии
 
 - Python
