@@ -237,7 +237,6 @@ class RecipesSerializer(serializers.ModelSerializer):
                     recipe_ingredient.save()
                 except RecipeIngredient.DoesNotExist:
                     pass
-        
         new_ingredients_to_create = [
             RecipeIngredient(recipe=instance, ingredient_id=data["id"],
                              amount=data["amount"])
