@@ -19,6 +19,9 @@ from .models import (
     Tag,
 )
 
+MIN_AMOUNT: int = 1
+MAX_AMOUNT: int = 32000
+
 
 class Base64ImageField(serializers.ImageField):
     def to_internal_value(self, data):
@@ -137,20 +140,15 @@ class IngredientSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-MIN_AMOUNT: int = 1
-MAX_AMOUNT: int = 32000
-
-
 class RecipeIngredientSerializer(serializers.ModelSerializer):
     id = serializers.ReadOnlyField(source="ingredient.id")
     name = serializers.ReadOnlyField(source="ingredient.name")
     measurement_unit = serializers.ReadOnlyField(
         source="ingredient.measurement_unit")
-    amount = serializers.DecimalField(
-        max_digits=None,
-        decimal_places=None,
+    amount = serializers.IntegerField(
         min_value=MIN_AMOUNT,
-        max_value=MAX_AMOUNT)
+        max_value=MAX_AMOUNT
+    )
 
     class Meta:
         model = RecipeIngredient
@@ -162,10 +160,6 @@ class RecipeIngredientSerializer(serializers.ModelSerializer):
         )
 
 
-MIN_AMOUNT: int = 1
-MAX_AMOUNT: int = 32000
-
-
 class RecipesSerializer(serializers.ModelSerializer):
     author = UserMeSerializer(many=False, required=False)
     tags = serializers.PrimaryKeyRelatedField(queryset=Tag.objects.all(),
@@ -174,11 +168,10 @@ class RecipesSerializer(serializers.ModelSerializer):
                                              source="recipe_ingredients")
     is_favorited = serializers.SerializerMethodField()
     is_in_shopping_cart = serializers.SerializerMethodField()
-    cooking_time = serializers.DecimalField(
-        max_digits=None,
-        decimal_places=None,
+    cooking_time = serializers.IntegerField(
         min_value=MIN_AMOUNT,
-        max_value=MAX_AMOUNT)
+        max_value=MAX_AMOUNT
+    )
 
     image = Base64ImageField()
 
@@ -243,10 +236,14 @@ class RecipesSerializer(serializers.ModelSerializer):
                     recipe_ingredient.amount = amount
                     recipe_ingredient.save()
                 except RecipeIngredient.DoesNotExist:
-                    RecipeIngredient.objects.create(
-                        recipe=instance, ingredient_id=ingredient_id,
-                        amount=amount
-                    )
+                    pass
+        
+        new_ingredients_to_create = [
+            RecipeIngredient(recipe=instance, ingredient_id=data["id"],
+                             amount=data["amount"])
+            for data in ingredients_data if "id" in data and "amount" in data
+        ]
+        RecipeIngredient.objects.bulk_create(new_ingredients_to_create)
 
         return instance
 
@@ -266,8 +263,8 @@ class RecipesSerializer(serializers.ModelSerializer):
 
 
 class BasketSerializer(serializers.ModelSerializer):
-    id = serializers.IntegerField()
-    recipe = serializers.CharField()
+    id = serializers.IntegerField(required=False)
+    recipe = serializers.PrimaryKeyRelatedField(queryset=Recipes.objects.all())
     image = serializers.SerializerMethodField()
     cooking_time = serializers.IntegerField()
 
@@ -282,6 +279,27 @@ class BasketSerializer(serializers.ModelSerializer):
 
     def get_image(self, obj):
         return obj.recipe.image.url if obj.recipe.image else None
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        recipe = self.context.get('recipe')
+        quantity = self.context.get('quantity', 1)
+        cooking_time = self.context.get('cooking_time', 0)
+
+        basket_items = []
+        for ingredient in recipe.ingredients.all():
+            basket_item = Basket(
+                recipe=recipe,
+                user=request.user,
+                quantity=quantity,
+                cooking_time=cooking_time,
+                image=recipe.image,
+                ingredient=ingredient,
+            )
+            basket_items.append(basket_item)
+
+        Basket.objects.bulk_create(basket_items)
+        return validated_data
 
 
 class FavoritesSerializer(serializers.ModelSerializer):

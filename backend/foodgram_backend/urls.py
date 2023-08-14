@@ -1,6 +1,6 @@
 from api.urls import router
 from api.views import (
-    AddRecipeToShoppingCart,
+    AddRecipeToShoppingCartViewSet,
     FavoritesViewSet,
     FollowViewSet,
     GetToken,
@@ -22,7 +22,8 @@ urlpatterns = [
          name="token-logout"),
     path(
         "api/recipes/<int:id>/shopping_cart/",
-        AddRecipeToShoppingCart.as_view(),
+        AddRecipeToShoppingCartViewSet.as_view(
+            {"post": "create", "delete": "destroy"}),
         name="add_to_shopping_cart",
     ),
     path(

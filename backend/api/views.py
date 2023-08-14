@@ -1,22 +1,18 @@
 from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
-from django.shortcuts import get_list_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import generics, status, viewsets
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.exceptions import ValidationError
-from rest_framework.permissions import IsAuthenticatedOrReadOnly
+from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.generics import RetrieveAPIView
+from rest_framework.permissions import AllowAny, IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
-from rest_framework.exceptions import APIException
-from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+
 from users.models import User
-
-
 from api.permissions import IsAuthorOrReadOnlyPermission
 from .models import (Basket, Favorites, Follow,
                      Ingredient, Recipes, Tag)
@@ -25,6 +21,7 @@ from .serializers import (
     ChangePasswordSerializer, ConfirmationSerializer,
     FavoritesSerializer, FollowSerializer, IngredientSerializer,
     RecipesSerializer, TagSerializer, UserMeSerializer, UserSerializer,
+    BasketSerializer
 )
 
 
@@ -164,40 +161,42 @@ class IngredientViewSet(viewsets.ModelViewSet):
     serializer_class = IngredientSerializer
 
 
-class AddRecipeToShoppingCart(APIView):
-    """
-    Добавить рецепт в корзину,
-    Удалить рецепт из корзины.
-    """
-
-    pagination_class = Pagination
+class AddRecipeToShoppingCartViewSet(viewsets.ModelViewSet):
+    serializer_class = BasketSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
-    # У меня не получается сделать через сериализатор и ModelViewSet
+    pagination_class = Pagination
 
-    def post(self, request, id):
-        recipe_id = int(id)
+    def create(self, request, id):
+        recipe = get_object_or_404(Recipes, pk=id)
         quantity = int(request.data.get("quantity", 1))
         cooking_time = int(request.data.get("cooking_time", 0))
-        recipe = get_object_or_404(Recipes, pk=recipe_id)
 
-        for ingredient in recipe.ingredients.all():
-            Basket.objects.create(
-                recipe=recipe,
-                user=request.user,
-                quantity=quantity,
-                cooking_time=cooking_time,
-                image=recipe.image,
-                ingredient=ingredient,
-            )
-        return Response(status=status.HTTP_201_CREATED)
+        serializer = self.get_serializer(
+            data={
+                "recipe": recipe.id,
+                "cooking_time": cooking_time
+            },
+            context={
+                "request": request,
+                "recipe": recipe,
+                "quantity": quantity,
+                "cooking_time": cooking_time
+            }
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
 
-    def delete(self, request, id):
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def destroy(self, request, id):
         recipe_id = int(id)
         baskets = Basket.objects.filter(user=request.user, recipe_id=recipe_id)
-        if baskets.first():
-            basket = baskets.first()
-            basket.delete()
+
+        if baskets.exists():
+            baskets.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
+        else:
+            return Response(status=status.HTTP_404_NOT_FOUND)
 
 
 @api_view(["GET"])
@@ -323,12 +322,12 @@ class FollowViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         user_id = self.kwargs.get("user_id")
-        follows = get_list_or_404(Follow, user=request.user, user_id=user_id)
+        follow = Follow.objects.filter(user=request.user,
+                                       user_id=user_id).first()
 
-        if follows:
-            follow_to_delete = follows[0]  # если ставлю first не работает.
-            user_obj = follow_to_delete.user
-            follow_to_delete.delete()
+        if follow:
+            user_obj = follow.user
+            follow.delete()
             serializer = UserMeSerializer(user_obj,
                                           context={"request": request})
             return Response(serializer.data)
